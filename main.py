@@ -17,6 +17,21 @@ app.add_middleware(
 
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel(GEMINI_MODEL)
+offline_messages = []
+
+def check_gemini():
+    try:
+        genai.configure(api_key=GEMINI_API_KEY)
+        model = genai.GenerativeModel(GEMINI_MODEL)
+
+        # Faz uma chamada bem simples
+        response = model.generate_content("ping")
+        if response and response.text:
+            print("[GEMINI] Acessível e funcionando")
+            return True
+    except Exception as e:
+        print(f"[GEMINI] Erro ao acessar: {e}")
+        return False
 
 @app.get("/")
 async def root():
@@ -38,28 +53,35 @@ async def websocket_endpoint(ws: WebSocket):
             # --- MUDANÇA PRINCIPAL 2: Usar a chave 'content' ---
             # Seu front-end envia 'content', não 'message'.
             user_message = payload.get("content", "")
+            
             if not user_message:
                 continue
+            
+            
+            if check_gemini():                
+                await ws.send_json({"type": "start"})
+                # --- MUDANÇA PRINCIPAL 3: Usar o chat para enviar a mensagem ---
+                # O método 'send_message' automaticamente usa o histórico.
+                # A temperatura é definida no modelo, não aqui.
+                      
+                stream = chat.send_message(
+                    user_message,
+                    stream=True
+                )
 
-            await ws.send_json({"type": "start"})
+                for chunk in stream:
+                    # Acessar o texto do chunk corretamente
+                    if chunk.parts:
+                        delta_text = chunk.parts[0].text
+                        if delta_text:
+                            await ws.send_json({"type": "token", "delta": delta_text})
 
-            # --- MUDANÇA PRINCIPAL 3: Usar o chat para enviar a mensagem ---
-            # O método 'send_message' automaticamente usa o histórico.
-            # A temperatura é definida no modelo, não aqui.
-            stream = chat.send_message(
-                user_message,
-                stream=True
-            )
+                await ws.send_json({"type": "done"})
+                await ws.send_json({"type": "turn_end"})
+            else:
+                await ws.send_json({"type": "offline", "message": user_message})
 
-            for chunk in stream:
-                # Acessar o texto do chunk corretamente
-                if chunk.parts:
-                    delta_text = chunk.parts[0].text
-                    if delta_text:
-                        await ws.send_json({"type": "token", "delta": delta_text})
-
-            await ws.send_json({"type": "done"})
-            await ws.send_json({"type": "turn_end"})
+            
 
     except WebSocketDisconnect:
         print("Cliente desconectado.")
